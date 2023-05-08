@@ -1,10 +1,10 @@
-# from __future__ import division
 import time
+from numpy._typing import NDArray
 import torch
 from torch.autograd import Variable
 import numpy as np
 import cv2
-from util import *
+from util import write_results, load_classes
 from darknet import Darknet
 from preprocess import prep_image
 import random
@@ -12,42 +12,33 @@ import argparse
 import pickle as pkl
 
 
-def get_test_input(input_dim, CUDA):
-    img = cv2.imread("imgs/messi.jpg")
-    img = cv2.resize(img, (input_dim, input_dim))
-    img_ = img[:, :, ::-1].transpose((2, 0, 1))
-    img_ = img_[np.newaxis, :, :, :] / 255.0
-    img_ = torch.from_numpy(img_).float()
-    img_ = Variable(img_)
-
-    if CUDA:
-        img_ = img_.cuda()
-
-    return img_
+# def get_test_input(input_dim, CUDA):
+#     img = cv2.imread("imgs/messi.jpg")
+#     img = cv2.resize(img, (input_dim, input_dim))
+#     img_ = img[:, :, ::-1].transpose((2, 0, 1))
+#     img_ = img_[np.newaxis, :, :, :] / 255.0
+#     img_ = torch.from_numpy(img_).float()
+#     img_ = Variable(img_)
+#     if CUDA:
+#         img_ = img_.cuda()
+#     return img_
 
 
-def prep_image(img, inp_dim):
+def write_box(x: torch.tensor, img: NDArray) -> NDArray:
     """
-    Prepare image for inputting to the neural network.
-
-    Returns a Variable
+    Adds bounding box to image
+    Params:
+        x: tensor
+        img: image to be shown
     """
-
-    orig_im = img
-    dim = orig_im.shape[1], orig_im.shape[0]
-    img = cv2.resize(orig_im, (inp_dim, inp_dim))
-    img_ = img[:, :, ::-1].transpose((2, 0, 1)).copy()
-    img_ = torch.from_numpy(img_).float().div(255.0).unsqueeze(0)
-    return img_, orig_im, dim
-
-
-def write(x, img):
     start_point = x[1:3].numpy().astype(int)
     end_point = x[3:5].numpy().astype(int)
 
     cls = int(x[-1])
     label = "{0}".format(classes[cls])
-    color = random.choice(colors)
+    print(label)
+    # color = random.choice(colors)
+    color = [0, 0, 255]
     thickness = 2
 
     cv2.rectangle(img, start_point, end_point, color, thickness)
@@ -85,7 +76,7 @@ def arg_parse():
     parser.add_argument(
         "--reso",
         dest="reso",
-        help="Input resolution of the network. Increase to increase accuracy. Decrease to increase speed",
+        help="Input res. of the network. Increase to increase accuracy. Decrease to increase speed",
         default="160",
         type=str,
     )
@@ -130,48 +121,44 @@ if __name__ == "__main__":
     start = time.time()
     while cap.isOpened():
         ret, frame = cap.read()
-        if ret:
-            img, orig_im, dim = prep_image(frame, inp_dim)
+        if not ret:
+            break
+        img, orig_im, dim = prep_image(frame, inp_dim)
 
-            #            im_dim = torch.FloatTensor(dim).repeat(1,2)
+        # im_dim = torch.FloatTensor(dim).repeat(1, 2)
 
-            if CUDA:
-                im_dim = im_dim.cuda()
-                img = img.cuda()
+        if CUDA:
+            # im_dim = im_dim.cuda()
+            img = img.cuda()
 
-            output = model(Variable(img), CUDA)
-            output = write_results(
-                output, confidence, num_classes, nms=True, nms_conf=nms_thesh
-            )
+        output = model(Variable(img), CUDA)
+        output = write_results(
+            output, confidence, num_classes, nms=True, nms_conf=nms_thesh
+        )
 
-            if type(output) == int:
-                frames += 1
-                print(
-                    "FPS of the video is {:5.2f}".format(frames / (time.time() - start))
-                )
-                cv2.imshow("frame", orig_im)
-                key = cv2.waitKey(1)
-                if key & 0xFF == ord("q"):
-                    break
-                continue
-
-            output[:, 1:5] = torch.clamp(output[:, 1:5], 0.0, float(inp_dim)) / inp_dim
-
-            #            im_dim = im_dim.repeat(output.size(0), 1)
-            output[:, [1, 3]] *= frame.shape[1]
-            output[:, [2, 4]] *= frame.shape[0]
-
-            classes = load_classes("data/coco.names")
-            colors = pkl.load(open("pallete", "rb"))
-
-            list(map(lambda x: write(x, orig_im), output))
-
+        if type(output) == int:
+            frames += 1
+            print("FPS of the video is {:5.2f}".format(frames / (time.time() - start)))
             cv2.imshow("frame", orig_im)
             key = cv2.waitKey(1)
             if key & 0xFF == ord("q"):
                 break
-            frames += 1
-            print("FPS of the video is {:5.2f}".format(frames / (time.time() - start)))
+            continue
 
-        else:
+        output[:, 1:5] = torch.clamp(output[:, 1:5], 0.0, float(inp_dim)) / inp_dim
+
+        # im_dim = im_dim.repeat(output.size(0), 1)
+        output[:, [1, 3]] *= frame.shape[1]
+        output[:, [2, 4]] *= frame.shape[0]
+
+        classes = load_classes("data/coco.names")
+        colors = pkl.load(open("pallete", "rb"))
+
+        list(map(lambda x: write_box(x, orig_im), output))
+
+        cv2.imshow("frame", orig_im)
+        key = cv2.waitKey(1)
+        if key & 0xFF == ord("q"):
             break
+        frames += 1
+        print("FPS of the video is {:5.2f}".format(frames / (time.time() - start)))
